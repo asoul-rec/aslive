@@ -1,6 +1,8 @@
 import asyncio
-from asyncio import PriorityQueue
-# from contextlib import asynccontextmanager
+from asyncio import PriorityQueue, Queue
+from contextlib import asynccontextmanager
+import functools
+import os
 # import traceback
 from typing import Optional, TypedDict, Literal
 import logging
@@ -101,6 +103,7 @@ class Player:
     _packet_modifier: PacketTimeModifier = None
 
     def __init__(self, flv_url, buffer_size=600):
+        self._flv_url = flv_url
         self.container = av.open(flv_url, mode='w', format='flv')
         self.streaming_time = 0
         self._buffer = PriorityQueue(buffer_size)
@@ -134,52 +137,95 @@ class Player:
                 await asyncio.sleep(wait)
             else:
                 if wait < -0.1:
-                    logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s")
+                    logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
+                                    f"current buffer size {self._buffer.qsize()}")
             logging.debug(f'mux {pkt_type} pkt {_count}, '
                           f'play at time {pkt_time:.3f}s, wait for {wait:.3f}s, '
                           f'{pkt.dts=}, {pkt.pts=}, {pkt.time_base=}')
-            self.container.mux(pkt)
+            try:
+                self.container.mux(pkt)
+            except Exception as e:
+                logging.error(type(e), e)
+                self.container = av.open(self._flv_url, mode='w', format='flv')
+                self.container.mux(pkt)
             _count += 1
 
-    async def _demuxer(self, input_name, flush_buffer=True, loop=-1):
-        loop = int(loop)
-        while loop != 0:
-            loop -= 1
-            with av.open(input_name, metadata_errors='ignore') as input_container:
-                if not self.streams:
-                    self.streams = {}
-                    for t in ['video', 'audio']:
-                        in_stream = getattr(input_container.streams, t)[0]
-                        self.streams[t] = self.container.add_stream(template=in_stream)
-                        logging.info(f"{t} stream added, template={in_stream}")
-                for i, packet in enumerate(input_container.demux()):
-                    packet: av.Packet
-                    if packet.dts is not None:
-                        pkt_type = packet.stream.type
-                        if i == 0:  # clear when first packet arrives
-                            self._packet_modifier.switch(flush_buffer)
-                            flush_buffer = False  # do not flush the buffer when looping
-                        logging.debug(f'put {pkt_type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
-                        await self._packet_modifier.put(packet)
-                        await asyncio.sleep(0)
+    async def _demuxer(self, input_name, *,
+                       flush_buffer=True, stream_loop=-1, progress_aiter,
+                       start_callback=None, fail_callback=None):
+        def new_video_init():
+            nonlocal started, flush_buffer
+            if not started:  # at the first beginning
+                started = True
+                self._packet_modifier.switch(flush_buffer=flush_buffer)
+                if start_callback is not None:
+                    start_callback()
+                progress_aiter.add_message(f"开始播放", final=True)
+            else:  # loop
+                self._packet_modifier.switch(flush_buffer=False)  # do not flush the buffer when looping
 
-    # async def _switch(self, flush_buffer):
-    # switch_item = [float('-inf'), 'switch', None]
-    # if flush_buffer:
-    #     await asyncio.sleep(0)
-    #     for i in range(self._buffer.qsize()):
-    #         self._buffer.get_nowait()
-    #     assert self._buffer.empty()
-    #     self._buffer.put_nowait(switch_item)
-    # else:
-    #     await self._buffer.put(switch_item)
-    #
-    # logging.debug('queue cleared')
+        started = False
+        try:
+            # test file name first
+            _loop = asyncio.get_running_loop()
+            exists = await _loop.run_in_executor(None, os.path.exists, input_name)
+            if exists:
+                progress_aiter.add_message("已找到视频文件，正在打开...")
+            else:
+                progress_aiter.add_message("视频文件不存在", final=True)
+                return
 
-    def play_now(self, file):
-        if self._demux_task is not None:
-            self._demux_task.cancel()
-        self._demux_task = asyncio.create_task(self._demuxer(file))
+            # open, decode, and push the stream
+            stream_loop = int(stream_loop)
+            while stream_loop != 0:
+                stream_loop -= 1
+                async with video_opener(input_name, metadata_errors='ignore') as input_container:
+                    if not self.streams:
+                        self.streams = {}
+                        for t in ['video', 'audio']:
+                            in_stream = getattr(input_container.streams, t)[0]
+                            self.streams[t] = self.container.add_stream(template=in_stream)
+                            logging.info(f"{t} stream added, template={in_stream}")
+                    for i, packet in enumerate(input_container.demux()):
+                        packet: av.Packet
+                        if packet.dts is not None:
+                            pkt_type = packet.stream.type
+                            if i == 0:
+                                new_video_init()
+                            logging.debug(f'put {pkt_type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
+                            await self._packet_modifier.put(packet)
+                            await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            progress_aiter.add_message("播放失败", final=True)
+            raise
+        finally:
+            if not started:
+                progress_aiter.add_message("未播放", final=True)
+                if fail_callback is not None:
+                    fail_callback()
+
+
+    def play_now(self, file, progress_aiter=None):
+        def start_callback():
+            if old_demux_task is not None:
+                old_demux_task.cancel()
+
+        def fail_callback():
+            self._demux_task = old_demux_task
+
+        if progress_aiter is None:
+            progress_aiter = Progress()
+            progress_aiter.finished = True  # Progress placeholder
+
+        old_demux_task = self._demux_task
+        self._demux_task = asyncio.create_task(self._demuxer(
+            file,
+            progress_aiter=progress_aiter,
+            start_callback=start_callback,
+            fail_callback=fail_callback
+        ))
 
     async def _watchdog(self):
         while True:
@@ -206,3 +252,48 @@ class Player:
 
     def __del__(self):
         self.close()
+
+
+@asynccontextmanager
+async def video_opener(*args, **kwargs):
+    # def _cache_prefetch():
+    #     with open(file, 'rb') as f:
+    #         f.read(1048576)
+    # if args:
+    #     file = args[0]
+    # else:
+    #     file = kwargs.get('file')
+    # await loop.run_in_executor(None, _cache_prefetch)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, functools.partial(av.open, *args, **kwargs))
+    try:
+        yield result
+    finally:
+        result.close()
+
+
+class Progress:
+    """
+    A callback async iter to report progress
+    """
+    message_queue: Queue
+    finished: bool
+
+    def __init__(self):
+        self.message_queue = Queue()
+        self.finished = False
+
+    async def __aiter__(self):
+        if self.finished:
+            return
+        while True:
+            yield await self.message_queue.get()
+            if self.finished:
+                return
+
+    def add_message(self, message, final=False):
+        if self.finished:
+            return
+        self.message_queue.put_nowait(message)
+        if final:
+            self.finished = True
