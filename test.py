@@ -37,12 +37,16 @@ async def main():
         config = json.load(conf_f)
     p = player.Player(config['rtmp_server'])
     # p = player.Player("test_out.flv")
-    for i in range(10):
-        p.play_now("test.flv")
-        await asyncio.sleep(5)
 
-
-
+    while True:
+        p.play_now("op1.mp4")
+        await asyncio.sleep(10)
+        # p.play_now("op2.mp4")
+        # await asyncio.sleep(5)
+        p.play_now("op3.mp4")
+        await asyncio.sleep(10)
+        p.play_now("ed4.mp4")
+        await asyncio.sleep(10)
 
 if __name__ == '__main__':
     asyncio.run(main())
