@@ -5,6 +5,7 @@ import functools
 import os
 # import traceback
 from typing import Optional, TypedDict, Literal
+from collections import deque
 import logging
 import av
 
@@ -20,7 +21,7 @@ class PacketTimeModifier:
         2. Video/Audio offset should be the same or very close (threshold +- 0.1s)
         3. Make the gap of audio stream (if exists) as small as possible
     """
-    _offset: float = 0
+    offset: float = 0
     _last_ptime: AVFloat = {'video': 0., 'audio': 0.}
     _last_dtime: AVFloat = {'video': 0., 'audio': 0.}
     queue: PriorityQueue
@@ -45,7 +46,7 @@ class PacketTimeModifier:
                     break
             logging.info(f"Buffer flushed, previous size {queue_size}, current size {self.queue.qsize()}")
 
-        logging.info(f'switch to a new offset, previous {self._offset:.3f}s')
+        logging.info(f'switch to a new offset, previous {self.offset:.3f}s')
         self._offset_ts = {'video': None, 'audio': None}
         # Clear the audio_buffer since it is useless if a new switching happens before the first video keyframe comes
         self.__audio_buffer.clear()
@@ -65,11 +66,11 @@ class PacketTimeModifier:
                     return
                 if raw_pt > 5:
                     logging.warning(f"new video stream start very late at t={raw_pt:.3f}s")
-                old_offset = self._offset  # debug only
-                self._offset = max(self._last_dtime['video'] - raw_dt, self._last_ptime['video'] - raw_pt)
-                self._offset += 1 / 60  # delay one typical frame time
-                self._offset_ts[pkt_type] = int(self._offset / pkt.time_base)
-                logging.debug(f"old_offset {old_offset:.3f}s, new offset {self._offset:.3f}s, "
+                old_offset = self.offset  # debug only
+                self.offset = max(self._last_dtime['video'] - raw_dt, self._last_ptime['video'] - raw_pt)
+                self.offset += 1 / 60  # delay one typical frame time
+                self._offset_ts[pkt_type] = int(self.offset / pkt.time_base)
+                logging.debug(f"old_offset {old_offset:.3f}s, new offset {self.offset:.3f}s, "
                               f"first video packet dt={raw_dt:.3f}s, pt={raw_pt:.3f}s")
 
             if pkt_type == 'audio':
@@ -77,7 +78,7 @@ class PacketTimeModifier:
                     self.__audio_buffer.append(pkt)
                     return
                 else:
-                    self._offset_ts[pkt_type] = int(self._offset / pkt.time_base)
+                    self._offset_ts[pkt_type] = int(self.offset / pkt.time_base)
                     for old_pkt in self.__audio_buffer:
                         old_pkt.dts += self._offset_ts[pkt_type]
                         old_pkt.pts += self._offset_ts[pkt_type]
@@ -120,18 +121,6 @@ class Player:
         start_time = _loop.time()
         while True:
             pkt_time, pkt_type, pkt = await self._buffer.get()
-            # if pkt_type == 'switch':
-            #     logging.info('muxer switch to a new offset')
-            #     offset += last_pkt_time
-            #     offset_ts = {'video': None, 'audio': None}
-            #     continue
-            # if pkt is None:
-            #     return
-            # if not offset_ts[pkt_type]:
-            #     offset_ts[pkt_type] = offset / pkt.time_base
-            # pkt.dts += offset_ts[pkt_type]
-            # pkt.pts += offset_ts[pkt_type]
-            # pkt.stream = self.streams[pkt_type]
 
             if (wait := start_time + pkt_time - _loop.time()) > 0:
                 await asyncio.sleep(wait)
@@ -145,7 +134,7 @@ class Player:
             try:
                 self.container.mux(pkt)
             except Exception as e:
-                logging.error(type(e), e)
+                logging.error(f"{type(e)}: {e}")
                 self.container = av.open(self._flv_url, mode='w', format='flv')
                 self.container.mux(pkt)
             _count += 1
@@ -206,8 +195,7 @@ class Player:
                 if fail_callback is not None:
                     fail_callback()
 
-
-    def play_now(self, file, progress_aiter=None):
+    def play_now(self, file, progress_aiter=None, danmaku=None):
         def start_callback():
             if old_demux_task is not None:
                 old_demux_task.cancel()
@@ -297,3 +285,68 @@ class Progress:
         self.message_queue.put_nowait(message)
         if final:
             self.finished = True
+
+
+class Danmaku:
+    data = None
+    _reader_future: asyncio.Future
+    _stale_buffer: deque[tuple[float, str]] = None
+    _active_buffer: deque[str]
+    update_callback: callable
+    update_count: int
+    update_time: float
+
+    def __init__(self, file, update_callback, total_count=20, update_count=5, update_time=1, buffer_time=5):
+        self._reader_future = self._reader(file)
+        if buffer_time > 0:
+            self._stale_buffer = deque()
+        total_count = max(int(total_count), 0)
+        self.update_count = min(max(int(update_count), 0), total_count)
+        self._active_buffer = deque(maxlen=total_count)
+        self.update_callback = update_callback
+        self.update_time = max(update_time, 0)
+        asyncio.create_task(self.updater())
+
+    def _reader(self, file):
+        def read():
+            import json
+            with open(file, encoding="utf-8") as f:
+                data = json.load(f)['data']
+                data = [(i[0], i[4]) for i in data]
+                data.sort()
+                self.data = data
+
+        loop = asyncio.get_running_loop()
+        return loop.run_in_executor(None, read)
+
+    async def updater(self):
+        def fill_from_buffer():
+            nonlocal count
+            if count > 0:
+                logging.info(f"New danmaku is not enough. Fill {count} slots from buffer.")
+                while count > 0 and self._stale_buffer:
+                    self._active_buffer.append(self._stale_buffer.pop()[1])
+                    count -= 1
+                if count > 0:
+                    logging.warning(f"Danmaku is not enough. {count} in {self.update_count} is not updated")
+        loop = asyncio.get_running_loop()
+        await self._reader_future
+        start_time = loop.time()
+        await asyncio.sleep(self.update_time)
+        current_time = loop.time()
+        count = self.update_count
+        for data_i in self.data:
+            if data_i[0] > current_time - start_time:
+                fill_from_buffer()
+                await self.update_callback('\n'.join(self._active_buffer))
+                count = self.update_count
+                await asyncio.sleep(self.update_time)
+                current_time = loop.time()
+            if count > 0:
+                self._active_buffer.append(data_i[1])
+            else:
+                self._stale_buffer.append(data_i)
+            count -= 1
+
+
+
