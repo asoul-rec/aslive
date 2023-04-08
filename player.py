@@ -4,9 +4,10 @@ from contextlib import asynccontextmanager
 import functools
 import os
 from typing import Optional, TypedDict, Literal
-from collections import deque
 import logging
 import av
+# local import below
+from danmaku import Danmaku
 
 AVFloat = TypedDict('AVFloat', {'video': Optional[float], 'audio': Optional[float]})
 AVInt = TypedDict('AVInt', {'video': Optional[int], 'audio': Optional[int]})
@@ -26,6 +27,7 @@ class PacketTimeModifier:
     queue: PriorityQueue[tuple[float, Literal['video', 'audio'], av.Packet]]
     _offset_ts: AVInt
     __audio_buffer: list
+    switching: asyncio.Event
 
     def __init__(self, queue):
         self.offset = 0.
@@ -34,6 +36,7 @@ class PacketTimeModifier:
         self.__audio_buffer = []
         self._last_ptime = {'video': 0., 'audio': 0.}
         self._last_dtime = {'video': 0., 'audio': 0.}
+        self.switching = asyncio.Event()
 
     def switch(self, flush_buffer=False):
         if flush_buffer and (queue_size := self.queue.qsize()) > 2:
@@ -52,6 +55,7 @@ class PacketTimeModifier:
         self._offset_ts = {'video': None, 'audio': None}
         # Clear the audio_buffer since it is useless if a new switching happens before the first video keyframe comes
         self.__audio_buffer.clear()
+        self.switching.clear()
 
     async def put(self, pkt):
         pkt_type: Literal['video', 'audio'] = pkt.stream.type
@@ -74,6 +78,7 @@ class PacketTimeModifier:
                 self._offset_ts[pkt_type] = int(self.offset / pkt.time_base)
                 logging.debug(f"old_offset {old_offset:.3f}s, new offset {self.offset:.3f}s, "
                               f"first video packet dt={raw_dt:.3f}s, pt={raw_pt:.3f}s")
+                self.switching.set()
 
             if pkt_type == 'audio':
                 if self._offset_ts['video'] is None:  # offset should be decided by video stream start time
@@ -104,6 +109,7 @@ class Player:
     _demux_task: asyncio.Task = None
     _mux_task: asyncio.Task = None
     _packet_modifier: PacketTimeModifier = None
+    _danmaku: Optional[Danmaku]
 
     def __init__(self, flv_url, buffer_size=600):
         self._flv_url = flv_url
@@ -112,6 +118,7 @@ class Player:
         self._buffer = PriorityQueue(buffer_size)
         self._packet_modifier = PacketTimeModifier(self._buffer)
         self._mux_task = asyncio.create_task(self._muxer())
+        self._danmaku = None
         asyncio.create_task(self._watchdog())
 
     async def _muxer(self):
@@ -139,11 +146,17 @@ class Player:
                 logging.error(f"get an exception during muxing, restarting: {repr(e)}")
                 self.container = av.open(self._flv_url, mode='w', format='flv')
                 self.container.mux(pkt)
+            if self._danmaku is not None:
+                self._danmaku.current_time = pkt_time
             _count += 1
 
     async def _demuxer(self, input_name, *,
                        flush_buffer=True, stream_loop=-1, progress_aiter,
                        start_callback=None, fail_callback=None):
+        async def _set_danmaku_start():
+            await self._packet_modifier.switching.wait()
+            self._danmaku.start_time = self._packet_modifier.offset
+
         def new_video_init():
             nonlocal started, flush_buffer
             if not started:  # at the first beginning
@@ -154,11 +167,13 @@ class Player:
                 progress_aiter.add_message(f"开始播放", final=True)
             else:  # loop
                 self._packet_modifier.switch(flush_buffer=False)  # do not flush the buffer when looping
+            if self._danmaku is not None:
+                _loop.create_task(_set_danmaku_start())
 
         started = False
+        _loop = asyncio.get_running_loop()
         try:
             # test file name first
-            _loop = asyncio.get_running_loop()
             exists = await _loop.run_in_executor(None, os.path.exists, input_name)
             if exists:
                 progress_aiter.add_message("已找到视频文件，正在打开...")
@@ -201,9 +216,16 @@ class Player:
         def start_callback():
             if old_demux_task is not None:
                 old_demux_task.cancel()
+            if self._danmaku is not None:
+                self._danmaku.updater.cancel()
+            self._danmaku = danmaku
 
         def fail_callback():
             self._demux_task = old_demux_task
+
+        # expose the TypeError as early as possible
+        if not (danmaku is None or isinstance(danmaku, Danmaku)):
+            raise TypeError(f"danmaku must be a Danmaku object, not a {type(danmaku)}")
 
         if progress_aiter is None:
             # create a placeholder
@@ -290,68 +312,3 @@ class Progress:
         self.message_queue.put_nowait(message)
         if final:
             self.finished = True
-
-
-class Danmaku:
-    data = None
-    _reader_future: asyncio.Future
-    _stale_buffer: deque[tuple[float, str]] = None
-    _active_buffer: deque[str]
-    update_callback: callable
-    update_count: int
-    update_time: float
-
-    def __init__(self, file, update_callback, total_count=20, update_count=5, update_time=1, buffer_time=5):
-        self._reader_future = self._reader(file)
-        if buffer_time > 0:
-            self._stale_buffer = deque()
-        total_count = max(int(total_count), 0)
-        self.update_count = min(max(int(update_count), 0), total_count)
-        self._active_buffer = deque(maxlen=total_count)
-        self.update_callback = update_callback
-        self.update_time = max(update_time, 0)
-        asyncio.create_task(self.updater())
-
-    def _reader(self, file):
-        def read():
-            import json
-            with open(file, encoding="utf-8") as f:
-                data = json.load(f)['data']
-                data = [(i[0], i[4]) for i in data]
-                data.sort()
-                self.data = data
-
-        loop = asyncio.get_running_loop()
-        return loop.run_in_executor(None, read)
-
-    async def updater(self):
-        def fill_from_buffer():
-            nonlocal count
-            if count > 0:
-                logging.info(f"New danmaku is not enough. Fill {count} slots from buffer.")
-                while count > 0 and self._stale_buffer:
-                    self._active_buffer.append(self._stale_buffer.pop()[1])
-                    count -= 1
-                if count > 0:
-                    logging.warning(f"Danmaku is not enough. {count} in {self.update_count} is not updated")
-        loop = asyncio.get_running_loop()
-        await self._reader_future
-        start_time = loop.time()
-        await asyncio.sleep(self.update_time)
-        current_time = loop.time()
-        count = self.update_count
-        for data_i in self.data:
-            if data_i[0] > current_time - start_time:
-                fill_from_buffer()
-                await self.update_callback('\n'.join(self._active_buffer))
-                count = self.update_count
-                await asyncio.sleep(self.update_time)
-                current_time = loop.time()
-            if count > 0:
-                self._active_buffer.append(data_i[1])
-            else:
-                self._stale_buffer.append(data_i)
-            count -= 1
-
-
-
