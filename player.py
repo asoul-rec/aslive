@@ -3,7 +3,6 @@ from asyncio import PriorityQueue, Queue
 from contextlib import asynccontextmanager
 import functools
 import os
-# import traceback
 from typing import Optional, TypedDict, Literal
 from collections import deque
 import logging
@@ -21,17 +20,20 @@ class PacketTimeModifier:
         2. Video/Audio offset should be the same or very close (threshold +- 0.1s)
         3. Make the gap of audio stream (if exists) as small as possible
     """
-    offset: float = 0
-    _last_ptime: AVFloat = {'video': 0., 'audio': 0.}
-    _last_dtime: AVFloat = {'video': 0., 'audio': 0.}
-    queue: PriorityQueue
+    offset: float
+    _last_ptime: AVFloat
+    _last_dtime: AVFloat
+    queue: PriorityQueue[tuple[float, Literal['video', 'audio'], av.Packet]]
     _offset_ts: AVInt
     __audio_buffer: list
 
     def __init__(self, queue):
+        self.offset = 0.
         self.queue = queue
         self._offset_ts = {'video': None, 'audio': None}
         self.__audio_buffer = []
+        self._last_ptime = {'video': 0., 'audio': 0.}
+        self._last_dtime = {'video': 0., 'audio': 0.}
 
     def switch(self, flush_buffer=False):
         if flush_buffer and (queue_size := self.queue.qsize()) > 2:
@@ -85,14 +87,14 @@ class PacketTimeModifier:
                         old_pkt_dtime = float(old_pkt.dts) * old_pkt.time_base
                         if old_pkt_dtime < self._last_dtime[pkt_type] + 0.021:  # aac frame 1024 samples / 48000 Hz
                             continue
-                        await self.queue.put([old_pkt_dtime, pkt_type, old_pkt])
+                        await self.queue.put((old_pkt_dtime, pkt_type, old_pkt))
                     self.__audio_buffer.clear()
 
         pkt.dts += self._offset_ts[pkt_type]
         pkt.pts += self._offset_ts[pkt_type]
         self._last_dtime[pkt_type] = dtime = float(pkt.dts) * pkt.time_base
         self._last_ptime[pkt_type] = float(pkt.pts) * pkt.time_base
-        await self.queue.put([dtime, pkt_type, pkt])
+        await self.queue.put((dtime, pkt_type, pkt))
 
 
 class Player:
@@ -134,7 +136,7 @@ class Player:
             try:
                 self.container.mux(pkt)
             except Exception as e:
-                logging.error(f"{type(e)}: {e}")
+                logging.error(f"get an exception during muxing, restarting: {repr(e)}")
                 self.container = av.open(self._flv_url, mode='w', format='flv')
                 self.container.mux(pkt)
             _count += 1
@@ -204,8 +206,11 @@ class Player:
             self._demux_task = old_demux_task
 
         if progress_aiter is None:
+            # create a placeholder
             progress_aiter = Progress()
-            progress_aiter.finished = True  # Progress placeholder
+            progress_aiter.finished = True
+        elif not isinstance(progress_aiter, Progress):
+            raise TypeError(f"progress_aiter must be a Progress object, not a {type(progress_aiter)}")
 
         old_demux_task = self._demux_task
         self._demux_task = asyncio.create_task(self._demuxer(
