@@ -109,3 +109,11 @@ class Danmaku:
             await self.update_callback(new_message)
         except Exception as e:
             logging.error(f"update_callback get an exception, new message: {new_message}, exception: {repr(e)}")
+
+    def restart(self):
+        if not self.updater.done():
+            self.updater.cancel()
+        self._stale_buffer.clear()
+        self._active_buffer.clear()
+        self.start_time = self.current_time = None
+        self.updater = asyncio.create_task(self._update_coro())

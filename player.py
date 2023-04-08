@@ -167,6 +167,8 @@ class Player:
                 progress_aiter.add_message(f"开始播放", final=True)
             else:  # loop
                 self._packet_modifier.switch(flush_buffer=False)  # do not flush the buffer when looping
+                if self._danmaku is not None:
+                    self._danmaku.restart()
             if self._danmaku is not None:
                 _loop.create_task(_set_danmaku_start())
 
