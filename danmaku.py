@@ -47,7 +47,7 @@ class Danmaku:
                         return
                     file_content += f.read(20 << 20)  # avoid OOM if a very large text file is wrongly fed
                 data = json.loads(file_content)['data']
-                data = [(i[0], i[4]) for i in data]
+                data = [(i[0], i[4]) for i in data if isinstance(i[4], str)]
                 data.sort()
                 self.data = data
             except UnicodeDecodeError:
@@ -99,5 +99,13 @@ class Danmaku:
                 self._active_buffer.append(self._stale_buffer.pop()[1])
                 count -= 1
             if count > 0:
-                logging.warning(f"Danmaku is not enough. {count} in {self.update_count} is not updated")
-        await self.update_callback('\n'.join(self._active_buffer))
+                if count == self.update_count:
+                    logging.warning(f"no new danmaku, skip this round")
+                    return
+                else:
+                    logging.warning(f"Danmaku is not enough. {count} in {self.update_count} is not updated")
+        new_message = '\n'.join(self._active_buffer)
+        try:
+            await self.update_callback(new_message)
+        except Exception as e:
+            logging.error(f"update_callback get an exception, new message: {new_message}, exception: {repr(e)}")
