@@ -39,12 +39,4 @@ async def init():
 async def danmaku_renderer():
     pass
 
-
-# @app.on_message(filters.text & filters.private)
-# async def echo(client, message):
-#     reply = await message.reply(message)
-#     # for i in range(100):
-#     #     await reply.edit_text(f"{time.time()}\n" * 20)
-#
-
 app.run(init())

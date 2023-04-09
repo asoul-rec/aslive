@@ -1,13 +1,12 @@
 import asyncio
-from asyncio import PriorityQueue, Queue
-from contextlib import asynccontextmanager
-import functools
+from asyncio import PriorityQueue
 import os
 from typing import Optional, TypedDict, Literal
 import logging
 import av
-# local import below
-from danmaku import Danmaku
+
+from .danmaku import Danmaku
+from .utils import video_opener, Progress
 
 AVFloat = TypedDict('AVFloat', {'video': Optional[float], 'audio': Optional[float]})
 AVInt = TypedDict('AVInt', {'video': Optional[int], 'audio': Optional[int]})
@@ -57,7 +56,13 @@ class PacketTimeModifier:
         self.__audio_buffer.clear()
         self.switching.clear()
 
-    async def put(self, pkt):
+    async def put(self, pkt: av.Packet):
+        """
+        Modify the packet timestamp and put into `self.queue`
+
+        :param pkt: the packet to put
+        :return: None
+        """
         pkt_type: Literal['video', 'audio'] = pkt.stream.type
         if pkt_type not in ['video', 'audio']:
             return
@@ -245,6 +250,7 @@ class Player:
         ))
 
     async def _watchdog(self):
+        # TODO: make it useful or delete it
         while True:
             if self._mux_task and self._mux_task.done():
                 logging.error("mux task finished unexpectedly")
@@ -269,48 +275,3 @@ class Player:
 
     def __del__(self):
         self.close()
-
-
-@asynccontextmanager
-async def video_opener(*args, **kwargs):
-    # def _cache_prefetch():
-    #     with open(file, 'rb') as f:
-    #         f.read(1048576)
-    # if args:
-    #     file = args[0]
-    # else:
-    #     file = kwargs.get('file')
-    # await loop.run_in_executor(None, _cache_prefetch)
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, functools.partial(av.open, *args, **kwargs))
-    try:
-        yield result
-    finally:
-        result.close()
-
-
-class Progress:
-    """
-    A callback async iter to report progress
-    """
-    message_queue: Queue
-    finished: bool
-
-    def __init__(self):
-        self.message_queue = Queue()
-        self.finished = False
-
-    async def __aiter__(self):
-        if self.finished:
-            return
-        while True:
-            yield await self.message_queue.get()
-            if self.finished:
-                return
-
-    def add_message(self, message, final=False):
-        if self.finished:
-            return
-        self.message_queue.put_nowait(message)
-        if final:
-            self.finished = True

@@ -1,7 +1,14 @@
+# sensitive data
 config.json
-*.flv
-*.mp4
 .idea
-test.json
 *.session
 *.session-journal
+
+# video and data file for testing
+*.flv
+*.mp4
+test.json
+
+# cache and temp file
+__pycache__
+*~

@@ -11,12 +11,15 @@ import player
 logging.basicConfig(format='%(asctime)s [%(levelname).1s] [%(name)s] %(message)s', level=logging.DEBUG)
 logging.getLogger('libav').setLevel(logging.INFO)
 
+
 async def real_print(x):
     print(x)
+
 
 async def test_print(x):
     while True:
         await real_print(x)
+
 
 async def clear(q):
     await asyncio.sleep(0)
@@ -25,12 +28,14 @@ async def clear(q):
     assert q.empty()
     q.put_nowait([-1000])
 
+
 async def putter(q):
     for i in range(10):
         if i == 0:
             await clear(q)
         await q.put([None])
         print(i)
+
 
 async def main():
     with open("config.json") as conf_f:
@@ -47,6 +52,7 @@ async def main():
         await asyncio.sleep(10)
         p.play_now("ed4.mp4")
         await asyncio.sleep(10)
+
 
 if __name__ == '__main__':
     asyncio.run(main())

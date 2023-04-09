@@ -1,14 +1,10 @@
-import asyncio
 import json
 import logging
-import os
-import time
 import functools
 
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ParseMode
-from player import Player, Progress
-from danmaku import Danmaku
+from player import Player, Progress, Danmaku
 
 logging.basicConfig(format='%(asctime)s [%(levelname).1s] [%(name)s] %(message)s', level=logging.INFO)
 
@@ -56,7 +52,7 @@ async def change_video(client, message):
     )
     async for pg in progress_aiter:
         await reply.edit_text(pg)
-    # await message.reply("debug: finished")
+    logging.info(f"Finished processing {message.text}")
 
-
-app.run(init())
+if __name__ == '__main__':
+    app.run(init())

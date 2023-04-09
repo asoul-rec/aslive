@@ -5,6 +5,22 @@ from typing import Optional, Any
 
 
 class Danmaku:
+    """
+    Time-based danmaku updater. This class provides
+
+    - Reading danmaku file. Should be DPlayer format JSON file (ASCII / UTF-8 encoding for Unicode characters).
+      Async loading with asyncio thread pool, start at initialization.
+
+    - External callback function for real operation. The callback is called with a fixed time interval.
+
+    - For synchronization, the start_time and current_time should be updated externally.
+      Danmaku time falling between the old and new time will be picked and displayed.
+
+    - The number of updated items will be kept at the `update_count` number. Extra danmaku will be discarded.
+      Insufficient danmaku will be loaded from the previous discarded items (if exist).
+
+    - The playing time should flow forward. Use `restart` to reset time and start again.
+    """
     data: Optional[list] = None
     _reader_future: asyncio.Future
     _stale_buffer: Optional[deque[tuple[float, str]]]
