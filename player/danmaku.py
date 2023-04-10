@@ -22,7 +22,7 @@ class Danmaku:
     - The playing time should flow forward. Use `restart` to reset time and start again.
     """
     data: Optional[list] = None
-    _reader_future: asyncio.Future
+    _reader_task: asyncio.Task
     _stale_buffer: Optional[deque[tuple[float, str]]]
     _active_buffer: deque[str]
     update_callback: callable
@@ -39,7 +39,7 @@ class Danmaku:
                  update_time=1,
                  buffer_time=5):
         self._name = file
-        self._reader_future = self._reader(file)
+        self._reader_task = asyncio.create_task(self._reader(file))
         if buffer_time > 0:
             self._stale_buffer = deque()
         else:
@@ -74,12 +74,11 @@ class Danmaku:
                 if not self.data:
                     self.data = [(0, "弹幕加载失败")]
 
-        loop = asyncio.get_running_loop()
-        return loop.run_in_executor(None, read)
+        return asyncio.to_thread(read)
 
     async def _update_coro(self):
         try:
-            await self._reader_future
+            await self._reader_task
             # wait until start_time & current_time is set
             while self.start_time is None or self.current_time is None:
                 logging.debug(f"danmaku {self._name} is loaded but not started")

@@ -45,13 +45,13 @@ async def main():
 
     while True:
         p.play_now("op1.mp4")
-        await asyncio.sleep(10)
-        # p.play_now("op2.mp4")
-        # await asyncio.sleep(5)
+        await asyncio.sleep(20)
+        p.play_now("op2.mp4")
+        await asyncio.sleep(20)
         p.play_now("op3.mp4")
-        await asyncio.sleep(10)
+        await asyncio.sleep(20)
         p.play_now("ed4.mp4")
-        await asyncio.sleep(10)
+        await asyncio.sleep(20)
 
 
 if __name__ == '__main__':

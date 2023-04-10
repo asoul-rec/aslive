@@ -1,6 +1,7 @@
 import asyncio
 from asyncio import PriorityQueue
 import os
+import traceback
 from typing import Optional, TypedDict, Literal
 import logging
 import av
@@ -108,8 +109,8 @@ class PacketTimeModifier:
 
 
 class Player:
-    container: av.container
-    streams: dict = None
+    container: av.container = None
+    streams: Optional[dict]
     _buffer: PriorityQueue
     _demux_task: asyncio.Task = None
     _mux_task: asyncio.Task = None
@@ -118,13 +119,18 @@ class Player:
 
     def __init__(self, flv_url, buffer_size=600):
         self._flv_url = flv_url
-        self.container = av.open(flv_url, mode='w', format='flv')
-        self.streaming_time = 0
+        self._open_container()
         self._buffer = PriorityQueue(buffer_size)
         self._packet_modifier = PacketTimeModifier(self._buffer)
         self._mux_task = asyncio.create_task(self._muxer())
         self._danmaku = None
         asyncio.create_task(self._watchdog())
+
+    def _open_container(self):
+        if self.container is not None:
+            self.container.close()
+        self.container = av.open(self._flv_url, mode='w', format='flv')
+        self.streams = {}
 
     async def _muxer(self):
         _loop = asyncio.get_running_loop()
@@ -135,22 +141,28 @@ class Player:
         start_time = _loop.time()
         while True:
             pkt_time, pkt_type, pkt = await self._buffer.get()
-
-            if (wait := start_time + pkt_time - _loop.time()) > 0:
-                await asyncio.sleep(wait)
-            else:
-                if wait < -0.1:
-                    logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
-                                    f"current buffer size {self._buffer.qsize()}")
+            wait = start_time + pkt_time - _loop.time()
             logging.debug(f'mux {pkt_type} pkt {_count}, '
                           f'play at time {pkt_time:.3f}s, wait for {wait:.3f}s, '
                           f'{pkt.dts=}, {pkt.pts=}, {pkt.time_base=}')
+            if wait > 0:
+                await asyncio.sleep(wait)
+            elif wait < -0.1:
+                logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
+                                f"current buffer size {self._buffer.qsize()}")
+
+            # Any exception during muxing will be ignored.
+            # The exception should be caused by a broken container, so the `self.container` will be reset.
+            # Note that CancelledError is a BaseException but NOT an Exception
             try:
                 self.container.mux(pkt)
             except Exception as e:
-                logging.error(f"get an exception during muxing, restarting: {repr(e)}")
-                self.container = av.open(self._flv_url, mode='w', format='flv')
-                self.container.mux(pkt)
+                logging.error(f"Get an exception during muxing. Restarting.")
+                traceback.print_exc()
+                old_streams = self.streams
+                self._open_container()
+                for t in ['video', 'audio']:
+                    self.streams[t] = self.container.add_stream(template=old_streams[t])
             if self._danmaku is not None:
                 self._danmaku.current_time = pkt_time
             _count += 1
@@ -170,6 +182,23 @@ class Player:
                 if start_callback is not None:
                     start_callback()
                 progress_aiter.add_message(f"开始播放", final=True)
+
+                # streams compatibility test
+                if self.streams:
+                    # video should always be compatible, otherwise add logic here
+                    out_astream = self.streams['audio']
+                    in_astream = input_container.streams.audio[0]
+                    if in_astream.sample_rate != out_astream.sample_rate:
+                        logging.info("Audio sample rate change detected. Reopen the container")
+                        self._open_container()
+                # add streams to the container
+                if not self.streams:
+                    self.streams = {}
+                    for t in ['video', 'audio']:
+                        in_stream = getattr(input_container.streams, t)[0]
+                        self.streams[t] = self.container.add_stream(template=in_stream)
+                        logging.info(f"{t} stream added, template={in_stream}")
+
             else:  # loop
                 self._packet_modifier.switch(flush_buffer=False)  # do not flush the buffer when looping
                 if self._danmaku is not None:
@@ -181,7 +210,7 @@ class Player:
         _loop = asyncio.get_running_loop()
         try:
             # test file name first
-            exists = await _loop.run_in_executor(None, os.path.exists, input_name)
+            exists = await asyncio.to_thread(os.path.exists, input_name)
             if exists:
                 progress_aiter.add_message("已找到视频文件，正在打开...")
             else:
@@ -193,21 +222,12 @@ class Player:
             while stream_loop != 0:
                 stream_loop -= 1
                 async with video_opener(input_name, metadata_errors='ignore') as input_container:
-                    if not self.streams:
-                        self.streams = {}
-                        for t in ['video', 'audio']:
-                            in_stream = getattr(input_container.streams, t)[0]
-                            self.streams[t] = self.container.add_stream(template=in_stream)
-                            logging.info(f"{t} stream added, template={in_stream}")
+                    new_video_init()
                     for i, packet in enumerate(input_container.demux()):
                         packet: av.Packet
                         if packet.dts is not None:
-                            pkt_type = packet.stream.type
-                            if i == 0:
-                                new_video_init()
-                            logging.debug(f'put {pkt_type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
+                            logging.debug(f'put {packet.stream.type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
                             await self._packet_modifier.put(packet)
-                            await asyncio.sleep(0)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -230,6 +250,9 @@ class Player:
         def fail_callback():
             self._demux_task = old_demux_task
 
+        # refuse to play if muxer is already dead
+        if self._mux_task.done():
+            raise RuntimeError(f"cannot play since the muxer of the player is dead")
         # expose the TypeError as early as possible
         if not (danmaku is None or isinstance(danmaku, Danmaku)):
             raise TypeError(f"danmaku must be a Danmaku object, not a {type(danmaku)}")
@@ -250,7 +273,6 @@ class Player:
         ))
 
     async def _watchdog(self):
-        # TODO: make it useful or delete it
         while True:
             if self._mux_task and self._mux_task.done():
                 logging.error("mux task finished unexpectedly")

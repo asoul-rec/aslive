@@ -34,17 +34,8 @@ class Progress:
 
 @asynccontextmanager
 async def video_opener(*args, **kwargs):
-    # def _cache_prefetch():
-    #     with open(file, 'rb') as f:
-    #         f.read(1048576)
-    # if args:
-    #     file = args[0]
-    # else:
-    #     file = kwargs.get('file')
-    # await loop.run_in_executor(None, _cache_prefetch)
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, functools.partial(av.open, *args, **kwargs))
+    result = await asyncio.to_thread(av.open, *args, **kwargs)
     try:
         yield result
     finally:
-        result.close()
+        await asyncio.to_thread(result.close)
