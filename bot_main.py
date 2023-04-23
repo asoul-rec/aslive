@@ -18,6 +18,7 @@ app = Client("aslive", api_id=config['api_id'], api_hash=config['api_hash'],
 
 async def init():
     global player
+    logging.info("starting aslive bot v230423")
     player = Player(config['rtmp_server'])
     async with app:
         await idle()
