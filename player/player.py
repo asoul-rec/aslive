@@ -156,7 +156,7 @@ class Player:
             # Note that CancelledError is a BaseException but NOT an Exception
             try:
                 self.container.mux(pkt)
-            except Exception as e:
+            except Exception:
                 logging.error(f"Get an exception during muxing. Restarting.")
                 traceback.print_exc()
                 old_streams = self.streams
@@ -251,7 +251,7 @@ class Player:
             self._demux_task = old_demux_task
 
         # refuse to play if muxer is already dead
-        if self._mux_task.done():
+        if self._mux_task is None or self._mux_task.done():
             raise RuntimeError(f"cannot play since the muxer of the player is dead")
         # expose the TypeError as early as possible
         if not (danmaku is None or isinstance(danmaku, Danmaku)):
@@ -273,26 +273,35 @@ class Player:
         ))
 
     async def _watchdog(self):
-        while True:
-            if self._mux_task and self._mux_task.done():
-                logging.error("mux task finished unexpectedly")
-                self.close()
-                logging.error(self._mux_task)
+        while self._mux_task is not None:  # otherwise self is already closed
+            if self._mux_task.done():
+                try:
+                    await self._mux_task
+                except BaseException:
+                    logging.error("mux task got an exception and is exited")
+                    traceback.print_exc()
+                else:
+                    logging.error("mux task finished unexpectedly")
+                finally:
+                    self.close()
                 return
-
             if self._demux_task and self._demux_task.done():
-                logging.info("demux task finished")
-                #     logging.error("demux task finished unexpectedly")
-                #     self.close()
-                logging.error(self._demux_task)
-            #     return
-
-            await asyncio.sleep(0.5)
+                try:
+                    await self._demux_task
+                except BaseException:
+                    logging.error("demux task got an exception and is exited")
+                    traceback.print_exc()
+                else:
+                    logging.debug("demux task is finished")
+            await asyncio.sleep(1)
 
     def close(self):
         logging.info('Player is closing')
         self._mux_task.cancel()
         self._demux_task.cancel()
+        self._mux_task = self._demux_task = None
+        if self._danmaku is not None:
+            self._danmaku.updater.cancel()
         self.container.close()
 
     def __del__(self):

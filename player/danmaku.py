@@ -32,6 +32,7 @@ class Danmaku:
     updater: asyncio.Task
     start_time: Optional[float]
     current_time: Optional[float]
+    _watchdog: asyncio.Task = None
 
     def __init__(self, file, update_callback,
                  total_count=20,
@@ -77,12 +78,15 @@ class Danmaku:
         return asyncio.to_thread(read)
 
     async def _update_coro(self):
+        if self._watchdog is not None:
+            self._watchdog.cancel()
+        self._watchdog = asyncio.create_task(self._watchdog_coro())
         try:
             await self._reader_task
             # wait until start_time & current_time is set
             while self.start_time is None or self.current_time is None:
                 logging.debug(f"danmaku {self._name} is loaded but not started")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self.update_time)
             self.start_time: float  # type hint
             self.current_time: float  # type hint
             logging.info(f"start streaming danmaku file: {self._name}")
@@ -107,6 +111,17 @@ class Danmaku:
             logging.error(f"danmaku updater get an exception, file: {self._name}, exception: {repr(e)}")
             raise
 
+    async def _watchdog_coro(self):
+        PROBE_NUM = 4
+        curr_time_history = deque(maxlen=PROBE_NUM)
+        while not self.updater.done():
+            curr_time = self.current_time
+            curr_time_history.append(curr_time)
+            if curr_time_history.count(curr_time) == PROBE_NUM:
+                logging.error("Danmaku is inactive over 60s, exiting.")
+                self.updater.cancel()
+            await asyncio.sleep(20)
+
     async def _do_update(self, count):
         if count > 0:
             logging.info(f"New danmaku is not enough. Fill {count} slots from buffer.")
@@ -126,8 +141,7 @@ class Danmaku:
             logging.error(f"update_callback get an exception, new message: {new_message}, exception: {repr(e)}")
 
     def restart(self):
-        if not self.updater.done():
-            self.updater.cancel()
+        self.updater.cancel()
         self._stale_buffer.clear()
         self._active_buffer.clear()
         self.start_time = self.current_time = None

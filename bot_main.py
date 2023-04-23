@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import functools
@@ -45,14 +46,19 @@ async def change_video(client, message):
     video_path = f'/rec/{dir_name}/transcoded/hq.mp4'
     progress_aiter = Progress()
     reply = await message.reply(f"正在寻找视频文件...")
-    player.play_now(
-        video_path,
-        progress_aiter=progress_aiter,
-        danmaku=Danmaku(f'/rec/{dir_name}/transcoded/danmaku.json', edit_callable, update_time=3)
-    )
-    async for pg in progress_aiter:
-        await reply.edit_text(pg)
-    logging.info(f"Finished processing {message.text}")
+    try:
+        player.play_now(
+            video_path,
+            progress_aiter=progress_aiter,
+            danmaku=Danmaku(f'/rec/{dir_name}/transcoded/danmaku.json', edit_callable, update_time=3)
+        )
+        async for pg in progress_aiter:
+            await reply.edit_text(pg)
+        logging.info(f"Finished processing {message.text}")
+    except RuntimeError:
+        await reply.edit_text(f"服务器错误，退出程序")
+        asyncio.create_task(app.stop())
+        raise
 
 if __name__ == '__main__':
     app.run(init())
