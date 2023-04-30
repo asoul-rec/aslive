@@ -185,11 +185,17 @@ class Player:
 
                 # streams compatibility test
                 if self.streams:
-                    # video should always be compatible, otherwise add logic here
                     out_astream = self.streams['audio']
+                    out_vstream = self.streams['video']
                     in_astream = input_container.streams.audio[0]
-                    if in_astream.sample_rate != out_astream.sample_rate:
-                        logging.info("Audio sample rate change detected. Reopen the container")
+                    in_vstream = input_container.streams.video[0]
+                    compatible = (
+                        in_astream.sample_rate == out_astream.sample_rate and
+                        in_vstream.width == out_vstream.width and
+                        in_vstream.height == out_vstream.height
+                    )
+                    if not compatible:
+                        logging.info("Audio/Video format changed. Reopen the container")
                         self._open_container()
                 # add streams to the container
                 if not self.streams:
