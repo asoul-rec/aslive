@@ -1,7 +1,9 @@
 import asyncio
 from collections import deque
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, Callable, Awaitable
+
+from pyrogram.errors import MessageNotModified
 
 
 class Danmaku:
@@ -34,7 +36,7 @@ class Danmaku:
     current_time: Optional[float]
     _watchdog: asyncio.Task = None
 
-    def __init__(self, file, update_callback,
+    def __init__(self, file, update_callback: Callable[[str], Awaitable],
                  total_count=20,
                  update_count=5,
                  update_time=1,
@@ -137,6 +139,8 @@ class Danmaku:
         new_message = '\n'.join(self._active_buffer)
         try:
             await self.update_callback(new_message)
+        except MessageNotModified:
+            logging.info(f"danmaku content is not modified")
         except Exception as e:
             logging.error(f"update_callback get an exception, new message: {new_message}, exception: {repr(e)}")
 

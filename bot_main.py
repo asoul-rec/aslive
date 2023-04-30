@@ -1,26 +1,28 @@
 import asyncio
 import json
 import logging
-import functools
 
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ParseMode
 from player import Player, Progress, Danmaku
+from bot_lib import update_message, app_group
 
 logging.basicConfig(format='%(asctime)s [%(levelname).1s] [%(name)s] %(message)s', level=logging.INFO)
+logging.getLogger('pyrogram').setLevel(logging.WARNING)
 
 with open("config.json") as conf_f:
     config = json.load(conf_f)
 
-app = Client("aslive", api_id=config['api_id'], api_hash=config['api_hash'],
-             bot_token=config['bot_token'])
+apps = [Client(bot_i['name'], api_id=config['api_id'], api_hash=config['api_hash'],
+               bot_token=bot_i['token']) for bot_i in config['bot']]
+app = apps[0]
 
 
 async def init():
     global player
-    logging.info("starting aslive bot v230423")
+    logging.info("starting aslive bot v230429")
     player = Player(config['rtmp_server'])
-    async with app:
+    async with app_group(apps):
         await idle()
 
 
@@ -37,13 +39,7 @@ async def change_video(client, message):
     else:
         await message.reply("Usage: `/play video_name`")
     channel_ids = config['test_channel']
-    edit_callable = functools.partial(
-        app.edit_message_text,
-        channel_ids['chat_id'],
-        channel_ids['message_id']['danmaku'],
-        parse_mode=ParseMode.DISABLED,
-        disable_web_page_preview=True
-    )
+    edit_callable = update_message.polling(apps, channel_ids['chat_id'], channel_ids['message_id']['danmaku'])
     video_path = f'/rec/{dir_name}/transcoded/hq.mp4'
     progress_aiter = Progress()
     reply = await message.reply(f"正在寻找视频文件...")
@@ -51,7 +47,11 @@ async def change_video(client, message):
         player.play_now(
             video_path,
             progress_aiter=progress_aiter,
-            danmaku=Danmaku(f'/rec/{dir_name}/transcoded/danmaku.json', edit_callable, update_time=3)
+            danmaku=Danmaku(
+                f'/rec/{dir_name}/transcoded/danmaku.json', edit_callable,
+                update_time=3 / len(apps),
+                update_count=2
+            )
         )
         async for pg in progress_aiter:
             await reply.edit_text(pg)
@@ -60,6 +60,7 @@ async def change_video(client, message):
         await reply.edit_text(f"服务器错误，退出程序")
         asyncio.create_task(app.stop())
         raise
+
 
 if __name__ == '__main__':
     app.run(init())
