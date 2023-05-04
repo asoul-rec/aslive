@@ -6,7 +6,7 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
 # from pyrogram.enums import ParseMode
 from player import Player, Progress, Danmaku
-from bot_lib import update_message, app_group
+from bot_lib import update_message, app_group, edit_group_call_title
 import selector
 
 logging.basicConfig(format='%(asctime)s [%(levelname).1s] [%(name)s] %(message)s', level=logging.INFO)
@@ -17,23 +17,26 @@ with open("config.json") as conf_f:
 
 apps = [Client(bot_i['name'], api_id=config['api_id'], api_hash=config['api_hash'],
                bot_token=bot_i['token']) for bot_i in config['bot']]
-app = apps[0]
+bot0 = apps[0]
+user = Client('user1', api_id=config['api_id'], api_hash=config['api_hash'],
+              phone_number=config['user'][1], no_updates=True)
+# apps.append(user)
 
 
 async def init():
     global player
     logging.info("starting aslive bot v230502")
     player = Player(config['rtmp_server'])
-    async with app_group(apps):
+    async with app_group([*apps, user]):
         await idle()
 
 
-@app.on_message((filters.command("help") | filters.command("start")) & filters.chat(config['test_group']['chat_id']))
+@bot0.on_message((filters.command("help") | filters.command("start")) & filters.chat(config['test_group']['chat_id']))
 async def help_command(_, message):
     await message.reply("Usage: `/play video_name`\nAll available `video_name`s are in the group file.")
 
 
-@app.on_message(filters.command("play") & filters.chat(config['test_group']['chat_id']))
+@bot0.on_message(filters.command("play") & filters.chat(config['test_group']['chat_id']))
 async def change_video(_, message):
     name = message.text.split(maxsplit=1)[1:]
     if name:
@@ -43,14 +46,14 @@ async def change_video(_, message):
         await message.reply("Usage: `/play video_name`")
 
 
-@app.on_message((filters.command("select")))
+@bot0.on_message((filters.command("select")))
 async def sel_command(_, message: Message):
     reply = selector.build_reply()
     if reply.pop('status') == 0:
         await message.reply(**reply)
 
 
-@app.on_callback_query(filters.regex(selector.sel_date_regex))
+@bot0.on_callback_query(filters.regex(selector.sel_date_regex))
 async def sel_update(_, callback_query: CallbackQuery):
     match = callback_query.matches[0]
     reply = selector.build_reply(*match.groups())
@@ -66,7 +69,7 @@ async def sel_update(_, callback_query: CallbackQuery):
             await callback_query.message.edit_text("selector failed")
 
 
-@app.on_callback_query()
+@bot0.on_callback_query()
 async def report_error(_, callback_query: CallbackQuery):
     logging.error(f"cannot process this callback query, data={callback_query.data}")
     await callback_query.message.edit_text("failed")
@@ -90,13 +93,18 @@ async def play_live(name: str, reply_message: Message = None):
         if reply_message is not None:
             async for pg in progress_aiter:
                 await reply_message.edit_text(pg)
+        try:
+            await edit_group_call_title(user, channel_ids['chat_id'], name[9:])
+        except Exception as e:
+            logging.error(f"got exception \"{repr(e)}\" when editing the call title, ignored")
         logging.info(f"Finished processing {name}")
     except RuntimeError:
         if reply_message is not None:
             await reply_message.edit_text(f"服务器错误，退出程序")
-        asyncio.create_task(app.stop())
+        asyncio.create_task(bot0.stop())
         raise
 
 
 if __name__ == '__main__':
-    app.run(init())
+    loop = asyncio.get_event_loop()
+    run = loop.run_until_complete(init())
