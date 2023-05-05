@@ -128,7 +128,11 @@ class Player:
 
     def _open_container(self):
         if self.container is not None:
-            self.container.close()
+            try:
+                self.container.close()
+            except Exception as e:
+                logging.warning(f"Ignoring the exception {repr(e)} during closing the old container.")
+                traceback.print_exc()
         self.container = av.open(self._flv_url, mode='w', format='flv')
         self.streams = {}
 
