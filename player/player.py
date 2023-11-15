@@ -142,9 +142,11 @@ class Player:
         while not self.streams:
             logging.debug('muxer waiting for start')
             await asyncio.sleep(0.1)
-        start_time = _loop.time()
+        start_time = None
         while True:
             pkt_time, pkt_type, pkt = await self._buffer.get()
+            if start_time is None:  # set start_time when the first packet arrives or after restarting
+                start_time = _loop.time() - pkt_time
             wait = start_time + pkt_time - _loop.time()
             logging.debug(f'mux {pkt_type} pkt {_count}, '
                           f'play at time {pkt_time:.3f}s, wait for {wait:.3f}s, '
@@ -152,8 +154,16 @@ class Player:
             if wait > 0:
                 await asyncio.sleep(wait)
             elif wait < -0.1:
-                logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
-                                f"current buffer size {self._buffer.qsize()}")
+                if wait > -5:
+                    logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
+                                    f"current buffer size {self._buffer.qsize()}")
+                else:
+                    logging.error(f"out of sync for too long ({-wait:.3f}s). resetting the start time.")
+                    start_time = None
+
+            if self._danmaku is not None:
+                self._danmaku.current_time = pkt_time
+            _count += 1
 
             # Any exception during muxing will be ignored.
             # The exception should be caused by a broken container, so the `self.container` will be reset.
@@ -167,9 +177,9 @@ class Player:
                 self._open_container()
                 for t in ['video', 'audio']:
                     self.streams[t] = self.container.add_stream(template=old_streams[t])
-            if self._danmaku is not None:
-                self._danmaku.current_time = pkt_time
-            _count += 1
+                start_time = None
+                _count = 0
+
 
     async def _demuxer(self, input_name, *,
                        flush_buffer=True, stream_loop=-1, progress_aiter,

@@ -4,7 +4,7 @@ import logging
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
-# from pyrogram.enums import ParseMode
+from pyrogram.enums import ParseMode
 from player import Player, Progress, Danmaku
 from bot_lib import update_message, app_group, edit_group_call_title
 import selector
@@ -16,16 +16,15 @@ with open("config.json") as conf_f:
     config = json.load(conf_f)
 
 apps = [Client(bot_i['name'], api_id=config['api_id'], api_hash=config['api_hash'],
-               bot_token=bot_i['token']) for bot_i in config['bot']]
+               bot_token=bot_i['token'], parse_mode=ParseMode.DISABLED) for bot_i in config['bot']]
 bot0 = apps[0]
 user = Client('user1', api_id=config['api_id'], api_hash=config['api_hash'],
-              phone_number=config['user'][1], no_updates=True)
-# apps.append(user)
+              phone_number=config['user'][1]["phone_number"], no_updates=True)
 
 
 async def init():
     global player
-    logging.info("starting aslive bot v230502")
+    logging.info("starting aslive bot v231115")
     player = Player(config['rtmp_server'])
     async with app_group([*apps, user]):
         await idle()
@@ -96,7 +95,7 @@ async def play_live(name: str, reply_message: Message = None):
         try:
             await edit_group_call_title(user, channel_ids['chat_id'], name[9:])
         except Exception as e:
-            logging.error(f"got exception \"{repr(e)}\" when editing the call title, ignored")
+            logging.error(f"got exception \"{e!r}\" when editing the call title, ignored")
         logging.info(f"Finished processing {name}")
     except RuntimeError:
         if reply_message is not None:
