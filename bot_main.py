@@ -5,8 +5,9 @@ import logging
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
 from pyrogram.enums import ParseMode
+
+from bot_lib import update_message, app_group, edit_group_call_title, get_rtmp_url, restart_group_call
 from player import Player, Progress, Danmaku
-from bot_lib import update_message, app_group, edit_group_call_title
 import selector
 
 logging.basicConfig(format='%(asctime)s [%(levelname).1s] [%(name)s] %(message)s', level=logging.INFO)
@@ -21,21 +22,31 @@ bot0 = apps[0]
 user = Client('user1', api_id=config['api_id'], api_hash=config['api_hash'],
               phone_number=config['user'][1]["phone_number"], no_updates=True)
 
+filter_me = filters.user([user_i['chat_id'] for user_i in config['user']]) & filters.private
+filter_my_group_or_me = filters.chat(config['test_group']['chat_id']) | filter_me
+
 
 async def init():
     global player
     logging.info("starting aslive bot v231129")
-    player = Player(config['rtmp_server'])
     async with app_group([*apps, user]):
+        player = Player(await get_rtmp_url(user, config['test_channel']['chat_id']))
         await idle()
 
 
-@bot0.on_message((filters.command("help") | filters.command("start")) & filters.chat(config['test_group']['chat_id']))
+@bot0.on_message((filters.command("help") | filters.command("start")) & filter_my_group_or_me)
 async def help_command(_, message):
-    await message.reply("Usage: `/play video_name`\nAll available `video_name`s are in the group file.")
+    await message.reply(
+        """
+        Usage:
+        `/play video_name` - All available `video_name`s are in the group file;
+        `/select` - select a live from the menu;
+        `/restart` - restart telegram group call (continue playing the current video);
+        """
+    )
 
 
-@bot0.on_message(filters.command("play") & filters.chat(config['test_group']['chat_id']))
+@bot0.on_message(filters.command("play") & filter_my_group_or_me)
 async def change_video(_, message):
     name = message.text.split(maxsplit=1)[1:]
     if name:
@@ -45,11 +56,17 @@ async def change_video(_, message):
         await message.reply("Usage: `/play video_name`")
 
 
-@bot0.on_message((filters.command("select")))
+@bot0.on_message(filters.command("select") & filter_my_group_or_me)
 async def sel_command(_, message: Message):
     reply = selector.build_reply()
     if reply.pop('status') == 0:
         await message.reply(**reply)
+
+
+@bot0.on_message(filters.command("restart") & filter_my_group_or_me)
+async def restart_command(_, message):
+    await restart_group_call(user, config['test_channel']['chat_id'])
+    await message.reply("频道直播已重置")
 
 
 @bot0.on_callback_query(filters.regex(selector.sel_date_regex))
