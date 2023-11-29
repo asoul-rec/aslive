@@ -180,7 +180,6 @@ class Player:
                 start_time = None
                 _count = 0
 
-
     async def _demuxer(self, input_name, *,
                        flush_buffer=True, stream_loop=-1, progress_aiter,
                        start_callback=None, fail_callback=None):
@@ -233,8 +232,10 @@ class Player:
             exists = await asyncio.to_thread(os.path.exists, input_name)
             if exists:
                 progress_aiter.add_message("已找到视频文件，正在打开...")
+                logging.debug(f"{input_name} exists, opening...")
             else:
                 progress_aiter.add_message("视频文件不存在", final=True)
+                logging.warning(f"{input_name} does not exist")
                 return
 
             # open, decode, and push the stream

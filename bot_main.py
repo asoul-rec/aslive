@@ -24,7 +24,7 @@ user = Client('user1', api_id=config['api_id'], api_hash=config['api_hash'],
 
 async def init():
     global player
-    logging.info("starting aslive bot v231115")
+    logging.info("starting aslive bot v231129")
     player = Player(config['rtmp_server'])
     async with app_group([*apps, user]):
         await idle()
@@ -85,8 +85,9 @@ async def play_live(name: str, reply_message: Message = None):
             progress_aiter=progress_aiter,
             danmaku=Danmaku(
                 f'/rec/{name}/transcoded/danmaku.json', edit_callable,
-                update_time=3 / len(apps),
-                update_count=2
+                total_count=config['danmaku']['total_count'],
+                update_interval=config['danmaku']['update_interval'],
+                update_count=config['danmaku']['update_count'],
             )
         )
         if reply_message is not None:

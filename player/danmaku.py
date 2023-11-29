@@ -29,7 +29,7 @@ class Danmaku:
     _active_buffer: deque[str]
     update_callback: callable
     update_count: int
-    update_time: float
+    update_interval: float
     _name: Any
     updater: asyncio.Task
     start_time: Optional[float]
@@ -39,7 +39,7 @@ class Danmaku:
     def __init__(self, file, update_callback: Callable[[str], Awaitable],
                  total_count=20,
                  update_count=5,
-                 update_time=1,
+                 update_interval=3,
                  buffer_time=5):
         self._name = file
         self._reader_task = asyncio.create_task(self._reader(file))
@@ -51,7 +51,7 @@ class Danmaku:
         self.update_count = min(max(int(update_count), 0), total_count)
         self._active_buffer = deque(maxlen=total_count)
         self.update_callback = update_callback
-        self.update_time = max(update_time, 0)
+        self.update_interval = max(update_interval, 0)
         self.updater = asyncio.create_task(self._update_coro())
         self.start_time = self.current_time = None
 
@@ -64,7 +64,8 @@ class Danmaku:
                     if file_content[0] != '{':
                         logging.error("the danmaku file must be JSON format starting with '{'")
                         return
-                    file_content += f.read(20 << 20)  # avoid OOM if a very large text file is wrongly fed
+                    # 20M max length, avoid OOM if a very large file is given accidentally
+                    file_content += f.read(20 << 20)
                 data = json.loads(file_content)['data']
                 data = [(i[0], i[4]) for i in data if isinstance(i[4], str)]
                 data.sort()
@@ -88,7 +89,7 @@ class Danmaku:
             # wait until start_time & current_time is set
             while self.start_time is None or self.current_time is None:
                 logging.debug(f"danmaku {self._name} is loaded but not started")
-                await asyncio.sleep(self.update_time)
+                await asyncio.sleep(self.update_interval)
             self.start_time: float  # type hint
             self.current_time: float  # type hint
             logging.info(f"start streaming danmaku file: {self._name}")
@@ -97,7 +98,7 @@ class Danmaku:
                 while data_i[0] > self.current_time - self.start_time:
                     await self._do_update(count)
                     count = self.update_count
-                    await asyncio.sleep(self.update_time)
+                    await asyncio.sleep(self.update_interval)
                 if count > 0:
                     self._active_buffer.append(data_i[1])
                 else:
