@@ -4,11 +4,13 @@ WORKDIR /root
 
 COPY ./ffmpeg_5.1.2_shared.sh /root/
 
-RUN ash ffmpeg_5.1.2_shared.sh 
+RUN ash ffmpeg_5.1.2_shared.sh
 
 COPY ./PyAV /root/PyAV
 
-RUN pip install cython && pip install ./PyAV/
+RUN echo 'cython<3.0' > constraint.txt; PIP_CONSTRAINT=constraint.txt pip install ./PyAV/
+
+RUN pip install tgcrypto
 
 COPY ./prepare.sh /root
 
@@ -20,4 +22,4 @@ WORKDIR /app
 
 COPY --from=requirements-stage /root/files /usr/local
 
-RUN pip install --no-cache-dir pyrogram tgcrypto
+RUN pip install --no-cache-dir pyrogram
