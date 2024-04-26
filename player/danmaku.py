@@ -2,6 +2,7 @@ import asyncio
 from collections import deque
 import logging
 from typing import Optional, Any, Callable, Awaitable
+from functools import partial
 
 from pyrogram.errors import MessageNotModified
 
@@ -59,24 +60,30 @@ class Danmaku:
         def read():
             import json
             try:
-                with open(file, encoding="utf-8") as f:
-                    file_content = f.read(1024)
-                    if file_content[0] != '{':
+                with opener() as f:
+                    file_content = f.read(1)
+                    if file_content[:1] != b'{':
                         logging.error("the danmaku file must be JSON format starting with '{'")
                         return
                     # 20M max length, avoid OOM if a very large file is given accidentally
                     file_content += f.read(20 << 20)
-                data = json.loads(file_content)['data']
+                data = json.loads(file_content.decode('utf-8'))['data']
                 data = [(i[0], i[4]) for i in data if isinstance(i[4], str)]
                 data.sort()
                 self.data = data
             except UnicodeDecodeError:
                 logging.error(f"danmaku is not a valid utf-8 encoded file")
             except Exception as e:
-                logging.error(f"danmaku load failed: {repr(e)}")
+                logging.error(f"danmaku load failed: {e!r}")
             finally:
                 if not self.data:
                     self.data = [(0, "弹幕加载失败")]
+
+        if file.startswith("http"):
+            from urllib import request, parse
+            opener = partial(request.urlopen, parse.quote(file, safe=':/?&='), timeout=10)
+        else:
+            opener = partial(open, file, 'rb')
 
         return asyncio.to_thread(read)
 

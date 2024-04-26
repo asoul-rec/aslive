@@ -229,7 +229,21 @@ class Player:
         _loop = asyncio.get_running_loop()
         try:
             # test file name first
-            exists = await asyncio.to_thread(os.path.exists, input_name)
+            if input_name.startswith("http"):
+                from urllib import request, parse, error
+                try:
+                    await asyncio.to_thread(
+                        request.urlopen, parse.quote(input_name, safe=':/?&='), timeout=10)
+                except error.URLError as e:
+                    logging.warning(f"cannot open URL {input_name}: {e!r}")
+                    exists = False
+                except Exception as e:
+                    logging.error(f"Unexpected error during url testing: {e!r}")
+                    exists = False
+                else:
+                    exists = True
+            else:
+                exists = await asyncio.to_thread(os.path.exists, input_name)
             if exists:
                 progress_aiter.add_message("已找到视频文件，正在打开...")
                 logging.debug(f"{input_name} exists, opening...")

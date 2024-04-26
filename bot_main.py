@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import argparse
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
@@ -28,7 +29,6 @@ filter_my_group_or_me = filters.chat(config['test_group']['chat_id']) | filter_m
 
 async def init():
     global player
-    logging.info("starting aslive bot v231129")
     async with app_group([*apps, user]):
         player = Player(await get_rtmp_url(user, config['test_channel']['chat_id']))
         await idle()
@@ -94,14 +94,15 @@ async def report_error(_, callback_query: CallbackQuery):
 async def play_live(name: str, reply_message: Message = None):
     channel_ids = config['test_channel']
     edit_callable = update_message.polling(apps, channel_ids['chat_id'], channel_ids['message_id']['danmaku'])
-    video_path = f'/rec/{name}/transcoded/hq.mp4'
+    base_dir = f'{cli_args.prefix}/{name}/transcoded'
+    video_path = f'{base_dir}/hq.mp4'
     progress_aiter = None if reply_message is None else Progress()
     try:
         player.play_now(
             video_path,
             progress_aiter=progress_aiter,
             danmaku=Danmaku(
-                f'/rec/{name}/transcoded/danmaku.json', edit_callable,
+                f'{base_dir}/danmaku.json', edit_callable,
                 total_count=config['danmaku']['total_count'],
                 update_interval=config['danmaku']['update_interval'],
                 update_count=config['danmaku']['update_count'],
@@ -118,10 +119,16 @@ async def play_live(name: str, reply_message: Message = None):
     except RuntimeError:
         if reply_message is not None:
             await reply_message.edit_text(f"服务器错误，退出程序")
-        asyncio.create_task(bot0.stop())
+        await bot0.stop()
         raise
 
 
 if __name__ == '__main__':
+    version = "v240426"
+    logging.info(f"starting aslive bot {version}")
+    parser = argparse.ArgumentParser(
+        description=f"stream h264 mp4 A-SOUL record video to telegram livestream [{version}]")
+    parser.add_argument('-p', '--prefix', help="base location of the video files")
+    cli_args = parser.parse_args()
     loop = asyncio.get_event_loop()
     run = loop.run_until_complete(init())
