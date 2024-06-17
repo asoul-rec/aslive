@@ -116,7 +116,7 @@ async def play_live(name: str, reply_message: Message = None):
             await edit_group_call_title(user, channel_ids['chat_id'], name[9:])
         except Exception as e:
             logging.error(f"got exception \"{e!r}\" when editing the call title, ignored")
-        logging.info(f"Finished processing {name}")
+        logging.info(f"Finish starting procedure of {name}")
     except RuntimeError:
         if reply_message is not None:
             await reply_message.edit_text(f"服务器错误，退出程序")

@@ -226,10 +226,11 @@ class Player:
                 _loop.create_task(_set_danmaku_start())
 
         async def demux_with_retry():
-            for retry in range(3):
+            fail = 0
+            while True:
                 i = 0
                 try:
-                    async with video_opener(input_name, metadata_errors='ignore', timeout=(10, 10)) as input_container:
+                    async with video_opener(input_name, metadata_errors='ignore', timeout=(10, 3)) as input_container:
                         new_video_init(input_container)
                         async for i, packet in iter_to_thread(enumerate(input_container.demux())):
                             packet: av.Packet
@@ -238,8 +239,10 @@ class Player:
                                 await self._packet_modifier.put(packet)
                     return  # do NOT retry if finish successfully
                 except av.AVError as e:
-                    if i > 1:  # retry only if the stream has already been played for a while
-                        logging.warning(f"An exception occurred during demuxing: {e!r}, retrying {retry + 1} ...")
+                    fail += 1
+                    # retry if the stream has already been played for a while and at most 3 times
+                    if i > 60 and fail <= 3:
+                        logging.warning(f"An exception occurred during demuxing: {e!r}, retrying {fail} ...")
                         await asyncio.sleep(5)
                     else:
                         raise
