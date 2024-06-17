@@ -112,8 +112,8 @@ class Player:
     container: av.container = None
     streams: Optional[dict]
     _buffer: PriorityQueue
-    _demux_task: asyncio.Task = None
-    _mux_task: asyncio.Task = None
+    _demux_task: Optional[asyncio.Task] = None
+    _mux_task: Optional[asyncio.Task] = None
     _packet_modifier: PacketTimeModifier = None
     _danmaku: Optional[Danmaku]
 
@@ -187,7 +187,7 @@ class Player:
             await self._packet_modifier.switching.wait()
             self._danmaku.start_time = self._packet_modifier.offset
 
-        def new_video_init():
+        def new_video_init(input_container):
             nonlocal started, flush_buffer
             if not started:  # at the first beginning
                 started = True
@@ -225,6 +225,25 @@ class Player:
             if self._danmaku is not None:
                 _loop.create_task(_set_danmaku_start())
 
+        async def demux_with_retry():
+            for retry in range(3):
+                i = 0
+                try:
+                    async with video_opener(input_name, metadata_errors='ignore') as input_container:
+                        new_video_init(input_container)
+                        for i, packet in enumerate(input_container.demux()):
+                            packet: av.Packet
+                            if packet.dts is not None:
+                                logging.debug(f'put {packet.stream.type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
+                                await self._packet_modifier.put(packet)
+                    return  # do NOT retry if finish successfully
+                except av.AVError as e:
+                    if i > 1:  # retry only if the stream has already been played for a while
+                        logging.warning(f"An exception occurred during demuxing: {e!r}, retrying {retry + 1} ...")
+                        await asyncio.sleep(5)
+                    else:
+                        raise
+
         started = False
         _loop = asyncio.get_running_loop()
         try:
@@ -256,13 +275,7 @@ class Player:
             stream_loop = int(stream_loop)
             while stream_loop != 0:
                 stream_loop -= 1
-                async with video_opener(input_name, metadata_errors='ignore') as input_container:
-                    new_video_init()
-                    for i, packet in enumerate(input_container.demux()):
-                        packet: av.Packet
-                        if packet.dts is not None:
-                            logging.debug(f'put {packet.stream.type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
-                            await self._packet_modifier.put(packet)
+                await demux_with_retry()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -282,7 +295,7 @@ class Player:
                 self._danmaku.updater.cancel()
             self._danmaku = danmaku
 
-        def fail_callback():
+        def fail_callback():  # continue to demux the old video if the new one is invalid
             self._demux_task = old_demux_task
 
         # refuse to play if muxer is already dead
@@ -328,6 +341,8 @@ class Player:
                     traceback.print_exc()
                 else:
                     logging.debug("demux task is finished")
+                finally:
+                    self._demux_task = None  # only report the error once
             await asyncio.sleep(1)
 
     def close(self):

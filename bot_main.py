@@ -28,8 +28,9 @@ filter_my_group_or_me = filters.chat(config['test_group']['chat_id']) | filter_m
 
 
 async def init():
-    global player
+    global player, version
     async with app_group([*apps, user]):
+        await bot0.send_message(config['test_group']['chat_id'], f"机器人已启动 [{version}]")
         player = Player(await get_rtmp_url(user, config['test_channel']['chat_id']))
         await idle()
 
@@ -124,7 +125,7 @@ async def play_live(name: str, reply_message: Message = None):
 
 
 if __name__ == '__main__':
-    version = "v240426"
+    version = "v240617"
     logging.info(f"starting aslive bot {version}")
     parser = argparse.ArgumentParser(
         description=f"stream h264 mp4 A-SOUL record video to telegram livestream [{version}]")
