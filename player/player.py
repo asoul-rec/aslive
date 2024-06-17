@@ -7,7 +7,7 @@ import logging
 import av
 
 from .danmaku import Danmaku
-from .utils import video_opener, Progress
+from .utils import video_opener, Progress, iter_to_thread
 
 AVFloat = TypedDict('AVFloat', {'video': Optional[float], 'audio': Optional[float]})
 AVInt = TypedDict('AVInt', {'video': Optional[int], 'audio': Optional[int]})
@@ -229,9 +229,9 @@ class Player:
             for retry in range(3):
                 i = 0
                 try:
-                    async with video_opener(input_name, metadata_errors='ignore') as input_container:
+                    async with video_opener(input_name, metadata_errors='ignore', timeout=(10, 10)) as input_container:
                         new_video_init(input_container)
-                        for i, packet in enumerate(input_container.demux()):
+                        async for i, packet in iter_to_thread(enumerate(input_container.demux())):
                             packet: av.Packet
                             if packet.dts is not None:
                                 logging.debug(f'put {packet.stream.type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
