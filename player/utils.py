@@ -42,8 +42,9 @@ async def video_opener(*args, **kwargs):
 
 
 async def iter_to_thread(iterator):
-    try:
-        while True:
-            yield await asyncio.to_thread(next, iterator)
-    except StopIteration:
-        return
+    stop_iter = object()
+    while True:
+        item = await asyncio.to_thread(next, iterator, stop_iter)
+        if item is stop_iter:
+            break
+        yield item
