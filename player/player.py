@@ -64,6 +64,7 @@ class PacketTimeModifier:
         :param pkt: the packet to put
         :return: None
         """
+        # noinspection PyTypeChecker
         pkt_type: Literal['video', 'audio'] = pkt.stream.type
         if pkt_type not in ['video', 'audio']:
             return
@@ -109,7 +110,7 @@ class PacketTimeModifier:
 
 
 class Player:
-    container: av.container = None
+    container: av.container.OutputContainer = None
     streams: Optional[dict]
     _buffer: PriorityQueue
     _demux_task: Optional[asyncio.Task] = None
@@ -176,7 +177,7 @@ class Player:
                 old_streams = self.streams
                 self._open_container()
                 for t in ['video', 'audio']:
-                    self.streams[t] = self.container.add_stream(template=old_streams[t])
+                    self.streams[t] = self.container.add_stream_from_template(old_streams[t], True)
                 start_time = None
                 _count = 0
 
@@ -215,7 +216,7 @@ class Player:
                     self.streams = {}
                     for t in ['video', 'audio']:
                         in_stream = getattr(input_container.streams, t)[0]
-                        self.streams[t] = self.container.add_stream(template=in_stream)
+                        self.streams[t] = self.container.add_stream_from_template(in_stream, True)
                         logging.info(f"{t} stream added, template={in_stream}")
 
             else:  # loop
@@ -238,7 +239,7 @@ class Player:
                                 logging.debug(f'put {packet.stream.type} pkt {i}, raw {packet.pts=}, raw {packet.dts=}')
                                 await self._packet_modifier.put(packet)
                     return  # do NOT retry if finish successfully
-                except av.AVError as e:
+                except av.FFmpegError as e:
                     fail += 1
                     # retry if the stream has already been played for a while and at most 3 times
                     if i > 60 and fail <= 3:

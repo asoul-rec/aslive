@@ -125,7 +125,7 @@ async def play_live(name: str, reply_message: Message = None):
 
 
 if __name__ == '__main__':
-    version = "v240617"
+    version = "v250831"
     logging.info(f"starting aslive bot {version}")
     parser = argparse.ArgumentParser(
         description=f"stream h264 mp4 A-SOUL record video to telegram livestream [{version}]")

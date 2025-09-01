@@ -5,7 +5,7 @@ from bot_lib import button_callback_grid
 
 sel_date_regex = re.compile(r"^SEL(?:_Y_(\d{4})(?:_M_(\d{2})(?:_N_(\d{2}))?)?)?$")
 
-with open('live_info.json') as f:
+with open('live_info.json', encoding='utf8') as f:
     live_info = json.load(f)
 
 

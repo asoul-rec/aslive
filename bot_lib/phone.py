@@ -2,7 +2,7 @@ import logging
 import random
 from typing import Union, Optional, Generator
 
-from pyrogram.raw import functions, base, types
+from pyrogram.raw import functions, types
 from pyrogram import Client
 
 
