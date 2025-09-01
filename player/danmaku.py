@@ -1,10 +1,12 @@
 import asyncio
 from collections import deque
 import logging
-from typing import Optional, Any, Callable, Awaitable
+from typing import Optional, Any, Callable, Awaitable, Union
 from functools import partial
 
 from pyrogram.errors import MessageNotModified
+
+from .utils import _run_callback
 
 
 class Danmaku:
@@ -28,7 +30,7 @@ class Danmaku:
     _reader_task: asyncio.Task
     _stale_buffer: Optional[deque[tuple[float, str]]]
     _active_buffer: deque[str]
-    update_callback: callable
+    update_callback: Callable[[str], Awaitable]
     update_count: int
     update_interval: float
     _name: Any
@@ -37,7 +39,7 @@ class Danmaku:
     current_time: Optional[float]
     _watchdog: asyncio.Task = None
 
-    def __init__(self, file, update_callback: Callable[[str], Awaitable],
+    def __init__(self, file: Union[str, Callable[[], Any]], update_callback: Callable[[str], Awaitable],
                  total_count=20,
                  update_count=5,
                  update_interval=3,
@@ -57,10 +59,10 @@ class Danmaku:
         self.start_time = self.current_time = None
 
     def _reader(self, file):
-        def read():
+        def read(_opener):
             import json
             try:
-                with opener() as f:
+                with _opener() as f:
                     file_content = f.read(1)
                     if file_content[:1] != b'{':
                         logging.error("the danmaku file must be JSON format starting with '{'")
@@ -79,13 +81,20 @@ class Danmaku:
                 if not self.data:
                     self.data = [(0, "弹幕加载失败")]
 
+        if callable(file):
+            async def wrapper():
+                opened_file = await _run_callback(file)
+                await asyncio.to_thread(read, lambda: opened_file)
+
+            return wrapper()
+
         if file.startswith("http"):
             from urllib import request, parse
             opener = partial(request.urlopen, parse.quote(file, safe=':/?&='), timeout=10)
         else:
             opener = partial(open, file, 'rb')
 
-        return asyncio.to_thread(read)
+        return asyncio.to_thread(read, opener)
 
     async def _update_coro(self):
         if self._watchdog is not None:

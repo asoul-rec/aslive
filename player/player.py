@@ -1,13 +1,14 @@
 import asyncio
 from asyncio import PriorityQueue
+import logging
 import os
 import traceback
-from typing import Optional, TypedDict, Literal
-import logging
+from typing import Optional, TypedDict, Literal, Callable, Any, Union
+
 import av
 
 from .danmaku import Danmaku
-from .utils import video_opener, Progress, iter_to_thread
+from .utils import video_opener, Progress, iter_to_thread, _run_callback
 
 AVFloat = TypedDict('AVFloat', {'video': Optional[float], 'audio': Optional[float]})
 AVInt = TypedDict('AVInt', {'video': Optional[int], 'audio': Optional[int]})
@@ -252,7 +253,14 @@ class Player:
         _loop = asyncio.get_running_loop()
         try:
             # test file name first
-            if input_name.startswith("http"):
+            if callable(input_name):
+                try:
+                    (await _run_callback(input_name)).close()
+                    exists = True
+                except Exception as e:
+                    logging.error(f"Unexpected error during url testing: {e!r}")
+                    exists = False
+            elif input_name.startswith("http"):
                 from urllib import request, parse, error
                 try:
                     await asyncio.to_thread(
@@ -291,7 +299,7 @@ class Player:
                 if fail_callback is not None:
                     fail_callback()
 
-    def play_now(self, file, progress_aiter=None, danmaku=None):
+    def play_now(self, file: Union[str, Callable[[], Any]], progress_aiter=None, danmaku=None):
         def start_callback():
             if old_demux_task is not None:
                 old_demux_task.cancel()

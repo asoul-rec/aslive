@@ -1,11 +1,15 @@
 import asyncio
+import argparse
+import contextlib
+import functools
 import json
 import logging
-import argparse
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
 from pyrogram.enums import ParseMode
+import asrec_telegram
+from asrec_telegram import open_telegram
 
 from bot_lib import update_message, app_group, edit_group_call_title, get_rtmp_url, restart_group_call
 from player import Player, Progress, Danmaku
@@ -17,9 +21,10 @@ logging.getLogger('pyrogram').setLevel(logging.WARNING)
 with open("config.json") as conf_f:
     config = json.load(conf_f)
 
-apps = [Client(bot_i['name'], api_id=config['api_id'], api_hash=config['api_hash'],
-               bot_token=bot_i['token'], parse_mode=ParseMode.DISABLED) for bot_i in config['bot']]
-bot0 = apps[0]
+bots = [Client(bot_i['name'], api_id=config['api_id'], api_hash=config['api_hash'],
+               bot_token=bot_i['token'], parse_mode=ParseMode.DISABLED, max_concurrent_transmissions=2)
+        for bot_i in config['bot']]
+bot0 = bots[0]
 user = Client('user1', api_id=config['api_id'], api_hash=config['api_hash'],
               phone_number=config['user'][1]["phone_number"], no_updates=True)
 
@@ -29,7 +34,9 @@ filter_my_group_or_me = filters.chat(config['test_group']['chat_id']) | filter_m
 
 async def init():
     global player, version
-    async with app_group([*apps, user]):
+    connect_database = str(cli_args.prefix).startswith('tg://')
+    db_context = asrec_telegram.database.connect() if connect_database else contextlib.nullcontext()
+    async with app_group([*bots]), user, db_context:
         await bot0.send_message(config['test_group']['chat_id'], f"机器人已启动 [{version}]")
         player = Player(await get_rtmp_url(user, config['test_channel']['chat_id']))
         await idle()
@@ -94,16 +101,23 @@ async def report_error(_, callback_query: CallbackQuery):
 
 async def play_live(name: str, reply_message: Message = None):
     channel_ids = config['test_channel']
-    edit_callable = update_message.polling(apps, channel_ids['chat_id'], channel_ids['message_id']['danmaku'])
+    edit_callable = update_message.polling(bots, channel_ids['chat_id'], channel_ids['message_id']['danmaku'])
     base_dir = f'{cli_args.prefix}/{name}/transcoded'
     video_path = f'{base_dir}/hq.mp4'
+    if video_path.startswith('tg://'):
+        video_path = functools.partial(open_telegram, bot0, video_path[6:])
+
     progress_aiter = None if reply_message is None else Progress()
     try:
+        danmaku_path = f'{base_dir}/danmaku.json'
+        if danmaku_path.startswith('tg://'):
+            dm_app = bots[1] if len(bots) > 1 else bot0
+            danmaku_path = functools.partial(open_telegram, dm_app, danmaku_path[6:])
         player.play_now(
             video_path,
             progress_aiter=progress_aiter,
             danmaku=Danmaku(
-                f'{base_dir}/danmaku.json', edit_callable,
+                danmaku_path, edit_callable,
                 total_count=config['danmaku']['total_count'],
                 update_interval=config['danmaku']['update_interval'],
                 update_count=config['danmaku']['update_count'],

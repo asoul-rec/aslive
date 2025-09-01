@@ -1,7 +1,9 @@
 import asyncio
 from asyncio import Queue
 from contextlib import asynccontextmanager
-import functools
+from types import CoroutineType
+from typing import Callable, Any
+
 import av
 
 
@@ -32,9 +34,18 @@ class Progress:
             self.finished = True
 
 
+async def _run_callback(func: Callable[[], Any]):
+    result = func()
+    if isinstance(result, CoroutineType):
+        result = await result
+    return result
+
+
 @asynccontextmanager
-async def video_opener(*args, **kwargs):
-    result = await asyncio.to_thread(av.open, *args, **kwargs)
+async def video_opener(file, *args, **kwargs):
+    if callable(file):
+        file = await _run_callback(file)
+    result = await asyncio.to_thread(av.open, file, *args, **kwargs)
     try:
         yield result
     finally:
