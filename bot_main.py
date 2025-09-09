@@ -146,4 +146,5 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--prefix', help="base location of the video files")
     cli_args = parser.parse_args()
     loop = asyncio.get_event_loop()
+    loop.set_debug(True)
     run = loop.run_until_complete(init())

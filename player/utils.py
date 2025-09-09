@@ -1,4 +1,5 @@
 import asyncio
+import time
 from asyncio import Queue
 from contextlib import asynccontextmanager
 from types import CoroutineType
@@ -32,6 +33,23 @@ class Progress:
         self.message_queue.put_nowait(message)
         if final:
             self.finished = True
+
+
+class ThrottledCall:
+    func: Callable
+    last_call_time: float
+
+    def __init__(self, func, min_interval, timer=time.time):
+        self.func = func
+        self.min_interval = min_interval
+        self.timer = timer
+        self.last_call_time = 0
+
+    def __call__(self, *args, **kwargs):
+        this_call_time = self.timer()
+        if this_call_time - self.last_call_time >= self.min_interval:
+            self.func(*args, **kwargs)
+            self.last_call_time = this_call_time
 
 
 async def _run_callback(func: Callable[[], Any]):

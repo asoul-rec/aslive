@@ -8,7 +8,7 @@ from typing import Optional, TypedDict, Literal, Callable, Any, Union
 import av
 
 from .danmaku import Danmaku
-from .utils import video_opener, Progress, iter_to_thread, _run_callback
+from .utils import video_opener, Progress, iter_to_thread, _run_callback, ThrottledCall
 
 AVFloat = TypedDict('AVFloat', {'video': Optional[float], 'audio': Optional[float]})
 AVInt = TypedDict('AVInt', {'video': Optional[int], 'audio': Optional[int]})
@@ -141,6 +141,7 @@ class Player:
     async def _muxer(self):
         _loop = asyncio.get_running_loop()
         _count = 0
+        too_slow_caller = ThrottledCall(logging.warning, 0.5)
         while not self.streams:
             logging.debug('muxer waiting for start')
             await asyncio.sleep(0.1)
@@ -157,7 +158,7 @@ class Player:
                 await asyncio.sleep(wait)
             elif wait < -0.1:
                 if wait > -5:
-                    logging.warning(f"muxing is too slow and out of sync for {-wait:.3f}s, "
+                    too_slow_caller(f"muxing is too slow and out of sync for {-wait:.3f}s, "
                                     f"current buffer size {self._buffer.qsize()}")
                 else:
                     logging.error(f"out of sync for too long ({-wait:.3f}s). resetting the start time.")
